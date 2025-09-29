@@ -4,167 +4,59 @@ on:
   workflow_dispatch:
     inputs:
       iso_url:
-        description: "Direct download URL to official Windows 11 ISO (x64/ARM64)"
+        description: "Direct download URL to official Windows 11 ISO (x64 or ARM64)"
         required: true
       edition_order:
-        description: "Comma-separated preference (matches Name): e.g. Pro,Professional,Enterprise,Education,Home"
+        description: "Comma-separated preference (matches Name): Pro,Professional,Enterprise,Education,Home"
         required: false
         default: "Pro,Professional,Enterprise,Education,Home"
 
 jobs:
-  build-tiny11:
+  build:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-      - name: Checkout your repo
+      - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Fetch tiny11builder (your fork)
+      - name: Checkout tiny11builder
         uses: actions/checkout@v4
         with:
           repository: tobberharley/tiny11builder
           ref: main
           path: tiny11builder
 
-      - name: Download Windows 11 ISO
-        shell: powershell
+      - name: Download Windows ISO
+        shell: pwsh
         run: |
-          $isoUrl = "${{ github.event.inputs.iso_url }}"
-          $out = "$PWD\win11.iso"
-          Write-Host "Downloading $isoUrl ..."
+          Set-StrictMode -Version Latest
+          $isoUrl = '${{ github.event.inputs.iso_url }}'
+          $out = Join-Path $PWD 'win11.iso'
           Invoke-WebRequest -Uri $isoUrl -OutFile $out
-          Get-Item $out | Format-List *
+          Write-Host "Downloaded to: $out"
 
-      - name: Mount Windows 11 ISO and capture drive letter
+      - name: Mount ISO
         id: mount_iso
-        shell: powershell
+        shell: pwsh
         run: |
-          $isoPath = "$PWD\win11.iso"
-          Mount-DiskImage -ImagePath $isoPath -StorageType ISO -PassThru | Out-Null
+          $isoPath = Join-Path $PWD 'win11.iso'
+          $di = Mount-DiskImage -ImagePath $isoPath -StorageType ISO -PassThru
           Start-Sleep -Seconds 3
-          $img = Get-DiskImage -ImagePath $isoPath
-          $vol = ($img | Get-Volume | Where-Object {$_.DriveLetter}).DriveLetter
-          if (-not $vol) { throw "Failed to get mounted ISO drive letter." }
-          "ISO_DRIVE=$vol" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
-          Write-Host "ISO mounted at $vol`:"
+          $vol = (Get-DiskImage -ImagePath $isoPath | Get-Volume | Where-Object DriveLetter).DriveLetter
+          if (-not $vol) { throw 'Failed to get mounted ISO drive letter.' }
+          "ISO_DRIVE=$vol" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
+          Write-Host "ISO mounted at $vol:"
 
-      - name: Auto-detect Windows edition index from install.wim/esd
+      - name: Detect edition index
         id: detect_index
-        shell: powershell
+        shell: pwsh
         env:
           ISO_DRV: ${{ steps.mount_iso.outputs.ISO_DRIVE }}
           EDITION_ORDER: ${{ github.event.inputs.edition_order }}
         run: |
           $iso = "$env:ISO_DRV`:"
-          $wim = Join-Path $iso "sources\install.wim"
-          $esd = Join-Path $iso "sources\install.esd"
-          if (Test-Path $wim) { $imageFile = $wim }
-          elseif (Test-Path $esd) { $imageFile = $esd }
-          else { throw "No install.wim or install.esd found under $iso\sources" }
-
-          Write-Host "Reading images from: $imageFile"
-          $lines = & dism /English /Get-WimInfo /WimFile:$imageFile
-          if ($LASTEXITCODE -ne 0) { throw "DISM failed to read $imageFile" }
-
-          $entries = @()
-          $curr = @{}
-          foreach ($line in $lines) {
-            if ($line -match '^\s*Index\s*:\s*(\d+)\s*$') {
-              if ($curr.Count) { $entries += [pscustomobject]$curr; $curr=@{} }
-              $curr.Index = [int]$matches[1]
-            } elseif ($line -match '^\s*Name\s*:\s*(.+)$') {
-              $curr.Name = $matches[1].Trim()
-            } elseif ($line -match '^\s*Architecture\s*:\s*(.+)$') {
-              $curr.Arch = $matches[1].Trim()
-            }
-          }
-          if ($curr.Count) { $entries += [pscustomobject]$curr }
-
-          if (-not $entries) { throw "No images found in $imageFile" }
-          Write-Host "Discovered images:"; $entries | Format-Table Index,Name,Arch -AutoSize
-
-          $pref = if ([string]::IsNullOrWhiteSpace($env:EDITION_ORDER)) { "Pro,Professional,Enterprise,Education,Home" } else { $env:EDITION_ORDER }
-          $prefList = $pref.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-
-          $chosen = $null
-          foreach ($p in $prefList) {
-            $chosen = $entries | Where-Object { $_.Name -match [regex]::Escape($p) } | Select-Object -First 1
-            if ($chosen) { break }
-          }
-          if (-not $chosen) { $chosen = $entries | Select-Object -First 1 }
-
-          Write-Host "Chosen image index: $($chosen.Index) ($($chosen.Name))"
-          "SKU_INDEX=$($chosen.Index)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
-
-      - name: Create temporary NTFS scratch drive (S:)
-        shell: powershell
-        run: |
-          $scr = "$PWD\scratch.vhdx"
-          @"
-          create vdisk file="$scr" maximum=40960 type=expandable
-          select vdisk file="$scr"
-          attach vdisk
-          create partition primary
-          format fs=ntfs quick label=scratch
-          assign letter=S
-          exit
-"@ | Out-File diskpart.txt -Encoding ascii
-          diskpart /s diskpart.txt
-
-      - name: Run tiny11builder (non-interactive)
-        shell: powershell
-        working-directory: tiny11builder
-        env:
-          ISO_DRV: ${{ steps.mount_iso.outputs.ISO_DRIVE }}
-          SKU_INDEX: ${{ steps.detect_index.outputs.SKU_INDEX }}
-        run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-
-          # Prefer the regular maker; switch to .\tiny11coremaker.ps1 if you want "core"
-          $args = @("-ISO", "$env:ISO_DRV", "-SCRATCH", "S", "-Index", "$env:SKU_INDEX")
-          Write-Host "tiny11maker args: $($args -join ' ')"
-
-          try {
-            .\tiny11maker.ps1 @args
-          } catch {
-            Write-Host "tiny11maker.ps1 failed: $($_.Exception.Message)"
-            throw
-          }
-
-          # Verify output
-          if (-not (Test-Path ".\tiny11.iso")) {
-            Write-Host "tiny11.iso not found; searching for any ISO..."
-            Get-ChildItem -Recurse -Filter *.iso | Select-Object FullName,Length | Format-Table -AutoSize
-            if (-not (Get-ChildItem -Recurse -Filter *.iso)) {
-              throw "Expected ISO not produced."
-            }
-          }
-
-      - name: Upload ISO artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiny11-iso
-          path: |
-            tiny11builder/tiny11.iso
-            tiny11builder/**/*.iso
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Cleanup (dismount ISO and scratch VHDX)
-        if: always()
-        shell: powershell
-        run: |
-          Write-Host "Detaching scratch VHDX..."
-          @"
-          select vdisk file="$PWD\scratch.vhdx"
-          detach vdisk
-          exit
-"@ | Out-File diskpart-detach.txt -Encoding ascii
-          diskpart /s diskpart-detach.txt | Out-Null
-
-          Write-Host "Dismounting ISO..."
-          $isoPath = "$PWD\win11.iso"
-          if (Test-Path $isoPath) {
-            Dismount-DiskImage -ImagePath $isoPath -ErrorAction SilentlyContinue
-          }
+          $wim = Join-Path $iso 'sources\install.wim'
+          $esd = Join-Path $iso 'sources\install.esd'
+          $imageFile = if (Test-Path $wim) { $wim } elseif (Test-Path $esd) { $esd } else { throw "No install.wim/esd found in $iso\sources" }
+          $lines = & dism /English /Get-WimInfo /Wi
