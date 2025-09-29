@@ -21,13 +21,13 @@ jobs:
         $mountResult = Mount-DiskImage -ImagePath "$PWD\Win11.iso" -PassThru
         $driveLetter = ($mountResult | Get-Volume).DriveLetter
         echo "ISO_DRIVE=$driveLetter" >> $env:GITHUB_ENV
-      shell: pwsh
+      shell: powershell
 
     - name: Run Tiny11Builder Script
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
         .\tiny11maker.ps1 -ISO $env:ISO_DRIVE -SCRATCH C
-      shell: pwsh
+      shell: powershell
 
     - name: Upload ISO Artifact
       uses: actions/upload-artifact@v4
