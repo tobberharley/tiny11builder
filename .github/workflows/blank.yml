@@ -14,7 +14,7 @@ jobs:
     - name: Download Windows 11 ISO
       run: |
         Invoke-WebRequest -Uri "https://software.download.prss.microsoft.com/dbazure/Win11_24H2_EnglishInternational_x64.iso?t=dcc379aa-0cfc-4152-9baf-a5f778424bd8&P1=1759230140&P2=601&P3=2&P4=CuW3sUh8QYNfFyUe%2fSXjgWoPs5sZMtQCW862oS4M6hwbtq6EaGFiqJHFdh4%2bqByUWH2p5hBAf18fb7dqzLBkxI%2bXTDoKXDEwbtFRq0lqUuqwbl0KfO68focD3Y9y1RDnHRTbp2PCT1kSyCIPgFniMycuaRzjhe%2bmTLjazZXcb74x2%2fVj3X1jeZc25%2fpIuNl49SRHksQd8fnxLLo1HfOTLqHp8Es%2b8Zuu2o99EhbD%2b0yvgrYPwvg64tXQQg7wrVJtim4ZS5OIs6imezGdWHLLW%2f4yrDh8V187so%2fGtQM3zBaCsC3jIRBcKogWh%2fqc547sivGpMdT2Gqg8BqSPsqW1Iw%3d%3d" -OutFile "Win11.iso"
-      shell: pwsh
+      shell: powershell
 
     - name: Mount ISO
       run: |
@@ -26,7 +26,7 @@ jobs:
     - name: Run Tiny11Builder Script
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        .\tiny11maker.ps1 -ISO $env:ISO_DRIVE -SCRATCH C
+        .\tiny11maker.ps1 -ISO $env:ISO_DRIVE -SCRATCH D
       shell: powershell
 
     - name: Upload ISO Artifact
