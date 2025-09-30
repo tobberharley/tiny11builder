@@ -26,7 +26,7 @@ jobs:
     - name: Run Tiny11Builder Script
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        .\tiny11maker.ps1 -ISO $env:ISO_DRIVE -SCRATCH D
+        .\tiny11maker.ps1 -ISO $env:ISO_DRIVE 
       shell: powershell
 
     - name: Upload ISO Artifact
